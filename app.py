@@ -1,0 +1,213 @@
+# app.py
+import streamlit as st
+from typing import List, Dict
+import json
+import os
+from datetime import datetime
+from dotenv import load_dotenv
+import requests
+from huggingface_hub import InferenceClient, HfApi
+
+# Load environment variables
+load_dotenv()
+
+class HuggingFaceAPI:
+    def __init__(self, api_key):
+        self.api_key = api_key
+        self.validate_api_key()
+        self.client = InferenceClient(
+            model="mistralai/Mixtral-8x7B-Instruct-v0.1",
+            token=api_key
+        )
+        
+    def validate_api_key(self):
+        """Validate the Hugging Face API key"""
+        try:
+            # Test the API key by making a simple API call
+            api = HfApi(token=self.api_key)
+            api.whoami()
+            print("✓ API key is valid")
+            return True
+        except Exception as e:
+            print(f"✗ API key validation failed: {str(e)}")
+            print("\nPlease ensure:")
+            print("1. You have created an API token at https://huggingface.co/settings/tokens")
+            print("2. The token has 'write' access")
+            print("3. You've correctly copied the token to your .env file")
+            print("4. The token starts with 'hf_'")
+            raise ValueError("Invalid Hugging Face API key")
+
+    def generate_text(self, prompt: str, max_length: int = 1024) -> str:
+        """Generate text using the Hugging Face model"""
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json"
+        }
+        
+        data = {
+            "inputs": prompt,
+            "parameters": {
+                "max_new_tokens": max_length,
+                "temperature": 0.7,
+                "repetition_penalty": 1.1
+            }
+        }
+        
+        response = requests.post(
+            "https://api-inference.huggingface.co/models/mistralai/Mixtral-8x7B-Instruct-v0.1",
+            headers=headers,
+            json=data
+        )
+        
+        if response.status_code == 200:
+            return response.json()[0]["generated_text"]
+        else:
+            error_msg = f"API request failed with status {response.status_code}: {response.text}"
+            print(error_msg)
+            raise Exception(error_msg)
+
+class TravelPlanner:
+    def __init__(self):
+        # Initialize Hugging Face API key
+        self.HUGGING_FACE_API_KEY = os.getenv("HUGGINGFACE_API_KEY")
+        if not self.HUGGING_FACE_API_KEY:
+            raise ValueError("HUGGINGFACE_API_KEY not found in .env file")
+        
+        # Initialize API
+        self.api = HuggingFaceAPI(self.HUGGING_FACE_API_KEY)
+
+    def parse_travel_preferences(self, text: str) -> Dict:
+        """Parse user's travel preferences"""
+        prompt = f"""
+        Extract travel preferences from the following text and return only a JSON object with these keys:
+        destination, start_date, duration, budget, interests, accommodation_type
+
+        Text: {text}
+        
+        Return only the JSON object, nothing else.
+        """
+        try:
+            response = self.api.generate_text(prompt)
+            # Extract JSON from response
+            json_str = response.strip()
+            if not json_str.startswith("{"):
+                json_str = "{" + json_str.split("{", 1)[1]
+            if not json_str.endswith("}"):
+                json_str = json_str.split("}", 1)[0] + "}"
+            return json.loads(json_str)
+        except Exception as e:
+            print(f"Error parsing preferences: {str(e)}")
+            return {
+                "destination": text.split("to")[1].split("for")[0].strip() if "to" in text else "",
+                "start_date": "",
+                "duration": text.split("for")[1].split("days")[0].strip() if "days" in text else "",
+                "budget": "",
+                "interests": [],
+                "accommodation_type": ""
+            }
+
+    def generate_itinerary(self, preferences: Dict) -> str:
+        """Generate a detailed travel itinerary"""
+        prompt = f"""
+        Create a detailed day-by-day travel itinerary based on these preferences:
+        Destination: {preferences.get('destination')}
+        Duration: {preferences.get('duration')} days
+        Budget: {preferences.get('budget')}
+        Interests: {preferences.get('interests')}
+        Accommodation: {preferences.get('accommodation_type')}
+
+        Format the itinerary day by day with activities, recommended times, and estimated costs.
+        """
+        try:
+            return self.api.generate_text(prompt)
+        except Exception as e:
+            print(f"Error generating itinerary: {str(e)}")
+            return "Unable to generate itinerary. Please check your API key and try again."
+
+    def get_travel_tips(self, destination: str) -> str:
+        """Get additional travel tips"""
+        prompt = f"Provide 3-5 essential travel tips for visiting {destination}."
+        try:
+            return self.api.generate_text(prompt)
+        except Exception as e:
+            print(f"Error getting travel tips: {str(e)}")
+            return "Unable to generate travel tips. Please check your API key and try again."
+
+    def plan_trip(self, user_input: str) -> Dict:
+        """Main function to plan a trip"""
+        try:
+            # Parse preferences
+            preferences = self.parse_travel_preferences(user_input)
+            
+            # Generate itinerary
+            itinerary = self.generate_itinerary(preferences)
+            
+            # Get additional tips
+            tips = self.get_travel_tips(preferences.get('destination', ''))
+            
+            return {
+                "preferences": preferences,
+                "itinerary": itinerary,
+                "additional_tips": tips
+            }
+        except Exception as e:
+            print(f"Error in plan_trip: {str(e)}")
+            return None
+
+def main():
+    st.title("🌍 Travel Planner App")
+    st.write("Welcome to the Travel Planner! Enter your travel preferences below to generate a personalized travel plan.")
+
+    # User input
+    st.markdown("### ✈️ Describe Your Travel Preferences")
+    st.write("Please provide details about your trip. For example:")
+    st.markdown("""
+    - **Destination**: Country or city (e.g., Japan, Paris)
+    - **Duration**: Number of days (e.g., 10 days)
+    - **Budget**: Total amount (e.g., $5000)
+    - **Interests**: Activities or experiences (e.g., cultural tours, hiking, food)
+    - **Accommodation**: Type of stay (e.g., boutique hotel, Airbnb)
+    """)
+
+    user_input = st.text_area(
+        "Enter your travel preferences here:",
+        placeholder="Example: 'I want to plan a trip to Japan for 10 days in April 2025. My budget is $5000, and I'm interested in cultural experiences, food tours, and historic temples. I prefer boutique hotels.'"
+    )
+
+    if st.button("🚀 Generate Travel Plan"):
+        if user_input:
+            try:
+                # Create the planner instance
+                planner = TravelPlanner()
+                
+                # Plan the trip
+                result = planner.plan_trip(user_input)
+                
+                if result:
+                    # Display the results
+                    st.success("🎉 Your travel plan has been generated successfully!")
+                    
+                    # Display preferences in a clean format
+                    st.markdown("### 📋 Travel Preferences")
+                    with st.expander("View Preferences", expanded=True):
+                        st.json(result["preferences"])
+                    
+                    # Display itinerary in a structured way
+                    st.markdown("### 📅 Travel Itinerary")
+                    with st.expander("View Itinerary", expanded=True):
+                        st.markdown(result["itinerary"])
+                    
+                    # Display additional tips
+                    st.markdown("### 💡 Additional Travel Tips")
+                    with st.expander("View Tips", expanded=True):
+                        st.markdown(result["additional_tips"])
+                else:
+                    st.error("❌ Failed to generate travel plan. Please check your input and try again.")
+            except Exception as e:
+                st.error(f"❌ An error occurred: {str(e)}")
+                st.write("Please check your API key and try again.")
+        else:
+            st.warning("⚠️ Please enter your travel preferences to generate a plan.")
+
+if __name__ == "__main__":
+    main()
