@@ -1,66 +1,45 @@
 # app.py
 import streamlit as st
-from typing import List, Dict
+from typing import Dict
 import json
 import os
-from datetime import datetime
 from dotenv import load_dotenv
 import requests
-from huggingface_hub import InferenceClient, HfApi
 
 # Load environment variables
 load_dotenv()
 
-class HuggingFaceAPI:
-    def __init__(self, api_key):
-        self.api_key = api_key
-        self.validate_api_key()
-        self.client = InferenceClient(
-            model="mistralai/Mixtral-8x7B-Instruct-v0.1",
-            token=api_key
-        )
-        
-    def validate_api_key(self):
-        """Validate the Hugging Face API key"""
-        try:
-            # Test the API key by making a simple API call
-            api = HfApi(token=self.api_key)
-            api.whoami()
-            print("✓ API key is valid")
-            return True
-        except Exception as e:
-            print(f"✗ API key validation failed: {str(e)}")
-            print("\nPlease ensure:")
-            print("1. You have created an API token at https://huggingface.co/settings/tokens")
-            print("2. The token has 'write' access")
-            print("3. You've correctly copied the token to your .env file")
-            print("4. The token starts with 'hf_'")
-            raise ValueError("Invalid Hugging Face API key")
+# Gemini API setup
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+if not GEMINI_API_KEY:
+    raise ValueError("GEMINI_API_KEY not found in .env file")
 
-    def generate_text(self, prompt: str, max_length: int = 1024) -> str:
-        """Generate text using the Hugging Face model"""
+class GeminiAPI:
+    def __init__(self, api_key: str):
+        self.api_key = api_key
+        self.base_url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent"
+
+    def generate_text(self, prompt: str) -> str:
+        """Generate text using the Gemini API."""
         headers = {
-            "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json"
+            "Content-Type": "application/json",
         }
-        
         data = {
-            "inputs": prompt,
-            "parameters": {
-                "max_new_tokens": max_length,
-                "temperature": 0.7,
-                "repetition_penalty": 1.1
-            }
+            "contents": [
+                {
+                    "parts": [
+                        {"text": prompt}
+                    ]
+                }
+            ]
         }
-        
         response = requests.post(
-            "https://api-inference.huggingface.co/models/mistralai/Mixtral-8x7B-Instruct-v0.1",
+            f"{self.base_url}?key={self.api_key}",
             headers=headers,
             json=data
         )
-        
         if response.status_code == 200:
-            return response.json()[0]["generated_text"]
+            return response.json()["candidates"][0]["content"]["parts"][0]["text"]
         else:
             error_msg = f"API request failed with status {response.status_code}: {response.text}"
             print(error_msg)
@@ -68,16 +47,11 @@ class HuggingFaceAPI:
 
 class TravelPlanner:
     def __init__(self):
-        # Initialize Hugging Face API key
-        self.HUGGING_FACE_API_KEY = os.getenv("HUGGINGFACE_API_KEY")
-        if not self.HUGGING_FACE_API_KEY:
-            raise ValueError("HUGGINGFACE_API_KEY not found in .env file")
-        
-        # Initialize API
-        self.api = HuggingFaceAPI(self.HUGGING_FACE_API_KEY)
+        # Initialize Gemini API
+        self.api = GeminiAPI(GEMINI_API_KEY)
 
     def parse_travel_preferences(self, text: str) -> Dict:
-        """Parse user's travel preferences"""
+        """Parse user's travel preferences."""
         prompt = f"""
         Extract travel preferences from the following text and return only a JSON object with these keys:
         destination, start_date, duration, budget, interests, accommodation_type
@@ -107,7 +81,7 @@ class TravelPlanner:
             }
 
     def generate_itinerary(self, preferences: Dict) -> str:
-        """Generate a detailed travel itinerary"""
+        """Generate a detailed travel itinerary."""
         prompt = f"""
         Create a detailed day-by-day travel itinerary based on these preferences:
         Destination: {preferences.get('destination')}
@@ -117,6 +91,7 @@ class TravelPlanner:
         Accommodation: {preferences.get('accommodation_type')}
 
         Format the itinerary day by day with activities, recommended times, and estimated costs.
+        Use bullet points for each day and ensure the output is well-structured and easy to read.
         """
         try:
             return self.api.generate_text(prompt)
@@ -125,7 +100,7 @@ class TravelPlanner:
             return "Unable to generate itinerary. Please check your API key and try again."
 
     def get_travel_tips(self, destination: str) -> str:
-        """Get additional travel tips"""
+        """Get additional travel tips."""
         prompt = f"Provide 3-5 essential travel tips for visiting {destination}."
         try:
             return self.api.generate_text(prompt)
@@ -134,7 +109,7 @@ class TravelPlanner:
             return "Unable to generate travel tips. Please check your API key and try again."
 
     def plan_trip(self, user_input: str) -> Dict:
-        """Main function to plan a trip"""
+        """Main function to plan a trip."""
         try:
             # Parse preferences
             preferences = self.parse_travel_preferences(user_input)
@@ -155,6 +130,33 @@ class TravelPlanner:
             return None
 
 def main():
+    # Set page title and icon
+    st.set_page_config(page_title="🌍 Travel Planner", page_icon="✈️")
+
+    # Custom CSS for better UI
+    st.markdown("""
+    <style>
+    .stButton button {
+        background-color: #4CAF50;
+        color: white;
+        font-size: 16px;
+        padding: 10px 24px;
+        border-radius: 8px;
+        border: none;
+    }
+    .stButton button:hover {
+        background-color: #45a049;
+    }
+    .stTextArea textarea {
+        font-size: 16px;
+        padding: 10px;
+    }
+    .stMarkdown h1, .stMarkdown h2, .stMarkdown h3 {
+        color: #2E86C1;
+    }
+    </style>
+    """, unsafe_allow_html=True)
+
     st.title("🌍 Travel Planner App")
     st.write("Welcome to the Travel Planner! Enter your travel preferences below to generate a personalized travel plan.")
 
@@ -171,7 +173,8 @@ def main():
 
     user_input = st.text_area(
         "Enter your travel preferences here:",
-        placeholder="Example: 'I want to plan a trip to Japan for 10 days in April 2025. My budget is $5000, and I'm interested in cultural experiences, food tours, and historic temples. I prefer boutique hotels.'"
+        placeholder="Example: 'I want to plan a trip to Japan for 10 days in April 2025. My budget is $5000, and I'm interested in cultural experiences, food tours, and historic temples. I prefer boutique hotels.'",
+        height=150
     )
 
     if st.button("🚀 Generate Travel Plan"):
@@ -195,12 +198,15 @@ def main():
                     # Display itinerary in a structured way
                     st.markdown("### 📅 Travel Itinerary")
                     with st.expander("View Itinerary", expanded=True):
-                        st.markdown(result["itinerary"])
+                        # Format itinerary with bullet points
+                        itinerary = result["itinerary"].replace("\n", "  \n")  # Ensure markdown line breaks
+                        st.markdown(itinerary)
                     
                     # Display additional tips
                     st.markdown("### 💡 Additional Travel Tips")
                     with st.expander("View Tips", expanded=True):
-                        st.markdown(result["additional_tips"])
+                        tips = result["additional_tips"].replace("\n", "  \n")  # Ensure markdown line breaks
+                        st.markdown(tips)
                 else:
                     st.error("❌ Failed to generate travel plan. Please check your input and try again.")
             except Exception as e:
